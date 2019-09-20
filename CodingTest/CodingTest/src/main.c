@@ -22,7 +22,7 @@ static void i2cInit(void)
     ioport_disable_pin(IOPORT_CREATE_PIN(PIOA, 3));
     ioport_disable_pin(IOPORT_CREATE_PIN(PIOA, 4));
 
-	/* Initialize the TWI0 peripheral as a master here for 100Khz operation. 
+	/* TODO: Initialize the TWI0 peripheral as a master here for 100Khz operation. 
 	 * The system core clock frequency is made public via SystemCoreClock
 	 *	Hint: Start with twi_master_setup() */
 
@@ -39,7 +39,7 @@ static void ledsInit(void)
 	ioport_set_pin_mode (IO_INDICATOR_LED, IOPORT_MODE_MUX_A);
 	ioport_set_pin_level(IO_INDICATOR_LED, false);
 
-	/* Initialize the RGB LEDS here */
+	/* TODO: Initialize the RGB LEDS here */
 }
 
 /*
@@ -48,13 +48,13 @@ static void ledsInit(void)
  */
 static void rgbDisplay(unsigned value)
 {
-	
+	/* TODO */
 }
 
 /* This routine reads the ALS register from the Ambient Light Sensor (ALS) I2C Slave Device */
 static int alsRead(void)
 {
-	/* Read the ALS_ALS_REGISTER here:
+	/* TODO: Read the ALS_ALS_REGISTER here:
 	 *		Hint: Start with twi_master_read()
 	 */
 	return -1;
@@ -63,7 +63,7 @@ static int alsRead(void)
 /* This routine reads the WHITE register from the Ambient Light Sensor (ALS) I2C Slave Device */
 static unsigned whiteRead(void)
 {
-	/* Read the ALS_WHITE_REGISTER here:
+	/* TODO: Read the ALS_WHITE_REGISTER here:
 	 *		Hint: Start with twi_master_read()
 	 */
 	return -1;
@@ -78,7 +78,7 @@ static unsigned whiteRead(void)
 static void ledTask(void *arg)
 {	
 	while (1) {
-		
+		/* TODO */
 	}
 }
 
@@ -90,7 +90,7 @@ static void alsTask(void *arg)
 {	
 	while (1) {
 		vTaskDelay(1000);
-		
+		/* TODO */
 	}
 }
 
@@ -102,7 +102,7 @@ static void whiteTask(void *arg)
 {
 	while (1) {
 		vTaskDelay(500);
-		
+		/* TODO */
 	}
 }
 
