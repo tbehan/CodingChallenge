@@ -8,6 +8,8 @@ src\ASF\sam\drivers\pio\pio_handler.c
 
 src\ASF\sam\drivers\twi\twi.c
 
+src\ASF\sam\drivers\wdt\wdt.c
+
 src\ASF\thirdparty\freertos\freertos-10.0.0\Source\croutine.c
 
 src\ASF\thirdparty\freertos\freertos-10.0.0\Source\event_groups.c

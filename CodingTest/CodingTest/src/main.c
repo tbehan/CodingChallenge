@@ -31,6 +31,7 @@ static void i2cInit(void)
 /* Initializes the LEDs for the board */
 static void ledsInit(void)
 {
+	/* This re-purposes pins as regular GPIO's */
 	static const uint32_t MATRIX_SYSIO_CFG  =  ((1 << 4) | (1 << 5) | (1 << 10) | (1 << 11) | (1 << 12));
 	MATRIX->CCFG_SYSIO = MATRIX_SYSIO_CFG;
 
@@ -110,6 +111,7 @@ int main (void)
 {
 	board_init();
 	sysclk_init();
+	wdt_disable(WDT);
 
 	i2cInit();
 	ledsInit();

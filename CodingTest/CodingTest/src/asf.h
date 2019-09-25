@@ -105,6 +105,9 @@
 // From module: TWI - Two-wire Interface
 #include <twi.h>
 
+// From module: WDT - Watchdog Timer
+#include <wdt.h>
+
 // From module: pio_handler support enabled
 #include <pio_handler.h>
 
