@@ -22,7 +22,7 @@ static void i2cInit(void)
     ioport_disable_pin(IOPORT_CREATE_PIN(PIOA, 3));
     ioport_disable_pin(IOPORT_CREATE_PIN(PIOA, 4));
 
-	/* TODO: Initialize the TWI0 peripheral as a master here for 100Khz operation. 
+	/* TODO: Initialize the TWI0 peripheral as a master here for 100Khz operation.
 	 * The system core clock frequency is made public via SystemCoreClock
 	 *	Hint: Start with twi_master_setup() */
 
@@ -30,10 +30,10 @@ static void i2cInit(void)
 
 /* Initializes the LEDs for the board */
 static void ledsInit(void)
-{		
+{
 	static const uint32_t MATRIX_SYSIO_CFG  =  ((1 << 4) | (1 << 5) | (1 << 10) | (1 << 11) | (1 << 12));
 	MATRIX->CCFG_SYSIO = MATRIX_SYSIO_CFG;
-	
+
 	/* Initialize the indicator LED */
 	ioport_set_pin_dir  (IO_INDICATOR_LED, IOPORT_DIR_OUTPUT);
 	ioport_set_pin_mode (IO_INDICATOR_LED, IOPORT_MODE_MUX_A);
@@ -44,7 +44,7 @@ static void ledsInit(void)
 
 /*
  * Display data using the RGB LED
- *   Take the 3 least significant bits and map them to the RGB leds 
+ *   Take the 3 least significant bits and map them to the RGB leds
  */
 static void rgbDisplay(unsigned value)
 {
@@ -52,7 +52,7 @@ static void rgbDisplay(unsigned value)
 }
 
 /* This routine reads the ALS register from the Ambient Light Sensor (ALS) I2C Slave Device */
-static int alsRead(void)
+static int alsRegRead(void)
 {
 	/* TODO: Read the ALS_ALS_REGISTER here:
 	 *		Hint: Start with twi_master_read()
@@ -61,7 +61,7 @@ static int alsRead(void)
 }
 
 /* This routine reads the WHITE register from the Ambient Light Sensor (ALS) I2C Slave Device */
-static unsigned whiteRead(void)
+static unsigned whiteRegRead(void)
 {
 	/* TODO: Read the ALS_WHITE_REGISTER here:
 	 *		Hint: Start with twi_master_read()
@@ -70,13 +70,13 @@ static unsigned whiteRead(void)
 }
 
 /*
- * This task should display the data received from alsTask and whiteTask using rgbDisplay()
- * When displaying ALS data the INDICATOR_LED should be ON. 
- * When displaying WHITE data the INDICATOR_LED should be OFF 
+ * This task should display the data received from alsRegTask and whiteRegTask using rgbDisplay()
+ * When displaying ALS register data the INDICATOR_LED should be ON.
+ * When displaying WHITE register data the INDICATOR_LED should be OFF
  * Each value should be displayed for 100msec.
  */
 static void ledTask(void *arg)
-{	
+{
 	while (1) {
 		/* TODO */
 	}
@@ -86,8 +86,8 @@ static void ledTask(void *arg)
  * This task should read the ALS_ALS_REGISTER every 1000msec and notify the LED
  * task of the result
  */
-static void alsTask(void *arg)
-{	
+static void alsRegTask(void *arg)
+{
 	while (1) {
 		vTaskDelay(1000);
 		/* TODO */
@@ -98,7 +98,7 @@ static void alsTask(void *arg)
  * This task should read the ALS_WHITE_REGISTER every 500msec and notify the LED
  * task of the result
  */
-static void whiteTask(void *arg)
+static void whiteRegTask(void *arg)
 {
 	while (1) {
 		vTaskDelay(500);
@@ -113,8 +113,8 @@ int main (void)
 
 	i2cInit();
 	ledsInit();
-	
+
 	/* TODO: Launch Tasks and Start the RTOS scheduler */
-		
+
 	return 0;
 }
