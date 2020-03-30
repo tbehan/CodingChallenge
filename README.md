@@ -1,36 +1,26 @@
 # JDRF Coding Challenge
 
-You are tasked with writing a multi-threaded application to read some data from an Ambient Light Sensor (ALS) and display the results using some LEDS.
-The application runs on an Atmel Cortex-M4 microcontroller.
-The ALS is interfaced to the microcontroller over I2C.
+You are tasked with writing the firmware for an elevator controller
 
-All required datasheets and documentation are provided in the docs folder
+The elevator has 3 components to be managed:
 
-Take the next couple minutes to read through the task overview and the template code provided. The comments in the code will describe what needs to be done in more detail. Feel free to ask questions at any point during the challenge.
+    - Motor Controller: An I2C device responsible for controlling the physical position of the elevator car.
 
-You are also welcome to use the internet to look up any additional resources or references you may require for this challenge. The following links are probably useful:
+    - Panel-1: An i2c device inside the elevator car that users can make floor requests through
 
-- [FreeRTOS API](https://www.freertos.org/a00106.html)
+    - Panel-2: An i2c device outside the elevator car that provides floor requests made from each floor of the building.
 
-## Part 1:
+You are to write firmware using at least 3 tasks to be executed on an arbitrary RTOS scheduler.
 
-The application will have 3 tasks/threads. You must implement these threads starting from the template provided.
+The firwmare should read the requests from the panels and issue commands to the motor-controller.
 
-- Thread 1: Reads a specific register from the ALS device every 500msec and sends the result to the LED thread (Thread #3) for display
+We would like the elevator car to satisfy all possible floor requests before changing directions.
+For example if the requests come in as 10 2 7 and we are currently at floor 3 we expect the car to stop at floors 7 then 10 before going back down to 2.
 
-- Thread 2: Reads a specific register from the ALS device every 1000msec and sends the result to the LED thread (Thread #3) for display
+You may assume that the elevator car stops at each floor for a minimum duration of 10 seconds.
 
-- Thread 3: Take the results from Threads 1 and 2 and displays them using the available LEDS. Each result is to be displayed for 100msec.
+Once the all floor requests have been satisfied we would like the elevator car to return to the ground floor.
 
-Atmel studio provides a basic I2C driver that can be used for this part of the challenge.
-You will need to import the TWI Service into your project.
+The code should be able to compile to an object file but does not need to run or link.
 
-All other required dependencies are already included in the project.
-
-## Part 2:
-
-The basic I2C driver provided by the atmel ASF is not great. We would like something that is ISR based instead of polling.
-
-Implement an ISR based routine to perform the I2C read operation.
-
-Feel free to start from the ASF provided driver and modify as required.
+You may assume a 32bit microcontroller architecture
