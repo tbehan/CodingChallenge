@@ -1,15 +1,14 @@
 #include "hardware.h"
 #include "rtos.h"
 
-
 /*-----------------------------------------------------------------------------
  *  Defines
  *-----------------------------------------------------------------------------*/
 #define ELV_NUM_FLOORS 11
-#define ELV_TOP_FLOOR 10
+#define ELV_TOP_FLOOR (ELV_NUM_FLOORS - 1)
 #define ELV_PASSENGER_TIME_MS 10000
 #define PANEL_UPDATE_INTERVAL_MS   50
-#define CONTROL_UPDATE_INTERVAL_MS 100
+#define CONTROL_UPDATE_INTERVAL_MS 50
 #define MUTEX_TIMEOUT_DEFAULT_MS 500
 #define SEM_TIMEOUT_DEFAULT_MS 500
 #define RTOS_DEFAULT_STACK_SIZE 100
@@ -64,12 +63,12 @@ struct
  */
 void isr_gpio_a(void)
 {
-    /* Clear interrupt */
-    hw_gpioIrqClear(GPIO_PORT_A, GPIO_PIN_0);
-
     /* Handle only the interrupt on Pin 0 */
     if (true == hw_gpioIrqStatus(GPIO_PORT_A, GPIO_PIN_0))
     {
+        /* Clear interrupt */
+        hw_gpioIrqClear(GPIO_PORT_A, GPIO_PIN_0);
+
         rtos_semGive(gpio_a_sem);
     }
 
@@ -78,31 +77,30 @@ void isr_gpio_a(void)
 
 /*-----------------------------------------------------------------------------
  *  Elevator Helper Functions
- *
- *  Note: Elevator helper functions do not handle thread safety. 
- *        They must be called in a thread safe manner.
  *-----------------------------------------------------------------------------*/
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  elv_get_direction
+ *         Name:  elv_update_direction
  *  Description:  Determine the direction the elevator should go based on the
  *                current request status of all the floors. If no requests
  *                default to ground floor (floor 0).
  *
  *       Inputs:  None.
  *
- *      Returns:  elevator_dir_t new elevator direction.
+ *      Returns:  None.
  * =====================================================================================
  */
-static elv_direction_t elv_get_direction(void)
+static void elv_update_direction(void)
 {
     int i;
     int count;
 
+    rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
+
+    /* If going up or stopped, check for requests above */
     if ((ELV_DIR_UP == elv_status.direction) || (ELV_DIR_STOP == elv_status.direction))
     {
-        /* If going up or stopped, check for requests above */
         count = 0;
         for (i = ELV_NUM_FLOORS; i > elv_status.current_floor; i--)
         {
@@ -112,12 +110,12 @@ static elv_direction_t elv_get_direction(void)
 
         /* If there are requests above go up */
         if (0 != count)
-            return ELV_DIR_UP;
+            elv_status.direction = ELV_DIR_UP;
     }
 
-    if ((ELV_DIR_DOWN == elv_status.direction) || (ELV_DIR_STOP == elv_status.direction))
+    /* If going down or stopped, check requests below */
+    else if ((ELV_DIR_DOWN == elv_status.direction) || (ELV_DIR_STOP == elv_status.direction))
     {
-        /* If going down or stopped, check requests below */
         count = 0;
         for (i = 0; i < elv_status.current_floor; i++)
         {
@@ -127,20 +125,26 @@ static elv_direction_t elv_get_direction(void)
 
         /* If there are requests below go down */
         if (0 != count)
-            return ELV_DIR_DOWN;
+            elv_status.direction = ELV_DIR_DOWN;
     }
 
     /* If there are no requests default to ground floor */
+    else
+    {
+        /* If already at ground floor stop */
+        if (0 == elv_status.current_floor)
+            elv_status.direction = ELV_DIR_STOP;
 
-    /* If already at ground floor stop */
-    if (0 == elv_status.current_floor)
-        return ELV_DIR_STOP;
+        /* If going to ground floor but not at ground floor 
+         * only possible direction is down */
+        else
+            elv_status.direction = ELV_DIR_DOWN;
+    }
 
-    /* If going to ground floor but not at ground floor 
-     * only possible direction is down */
-    return ELV_DIR_DOWN;
+    rtos_mtxGive(elv_status.mtx);
 
-}		/* -----  end of function elv_get_direction  ----- */
+    return;
+}		/* -----  end of function elv_update_direction  ----- */
 
 /* 
  * ===  FUNCTION  ======================================================================
@@ -160,8 +164,12 @@ static void elv_add_request(unsigned int request)
         return;
 
     /* Update elevator status */
+    rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
     elv_status.floor_request[request] = FLOOR_STOP;
-    elv_status.direction = elv_get_direction();
+    rtos_mtxGive(elv_status.mtx);
+
+    /* Update elevator direction */
+    elv_update_direction();
 
     return;
 }		/* -----  end of function elv_add_request  ----- */
@@ -174,7 +182,7 @@ static void elv_add_request(unsigned int request)
  *       Inputs: 0 -> 10   = Request to clear,
  *               Otherwise = Do Nothing.
  *
- *      Returns: State of the request that was just cleared
+ *      Returns: State of the floor request that was just cleared
  * =====================================================================================
  */
 static floor_request_t elv_clear_request(unsigned int request)
@@ -183,14 +191,83 @@ static floor_request_t elv_clear_request(unsigned int request)
     if (ELV_NUM_FLOORS < request)
         return FLOOR_SKIP;
 
-    /* Get the current state of the request that is being cleared */
-    floor_request_t request_cleared = elv_status.floor_request[request];
+    floor_request_t request_cleared;
 
+    rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
+    request_cleared = elv_status.floor_request[request];
     elv_status.floor_request[request] = FLOOR_SKIP;
-    elv_status.direction = elv_get_direction();
+    rtos_mtxGive(elv_status.mtx);
+
+    elv_update_direction();
 
     return request_cleared;
 }		/* -----  end of function elv_clear_request  ----- */
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  i2c_panel_read
+ *  Description:  Read from and i2c panel.
+ *
+ *       Inputs:  Panel address,
+ *      Returns:  Panel data.
+ * =====================================================================================
+ */
+uint8_t i2c_panel_read(uint8_t i2c_addr)
+{
+    int status;
+    uint8_t rx_data;
+    uint8_t tx_data = 0;
+
+    /* Start I2C Critical Section */
+    rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
+    status = hw_i2cWriteRead(
+            i2c_addr,
+            &tx_data,
+            sizeof(tx_data),
+            &rx_data,
+            sizeof(rx_data)
+            );
+    if (0 != status)
+    {
+        /* Handle i2c error here */
+    }
+    rtos_mtxGive(i2c_mtx);
+    /* End I2C Mutex Section */
+
+    return rx_data;
+}		/* -----  end of function i2c_panel_read  ----- */
+
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  i2c_control_write
+ *  Description:  Write to the elevator motor control the floor to move to.
+ *
+ *      Inputs:  The floor to move to.
+ *     Returns:  The current floor.
+ * =====================================================================================
+ */
+uint8_t i2c_control_write(uint8_t next_floor)
+{
+    int status;
+    uint8_t rx_array[2];
+
+    rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
+    status = hw_i2cWriteRead(
+            I2C_CONTROL_ADDR,
+            &next_floor,
+            sizeof(next_floor),
+            rx_array,
+            sizeof(rx_array)
+            );
+    if (0 != status)
+    {
+        /* Handle i2c error here */
+    }
+    rtos_mtxGive(i2c_mtx);
+
+    return rx_array[0];
+}		/* -----  end of function i2c_control_write  ----- */
 
 
 /*-----------------------------------------------------------------------------
@@ -211,8 +288,6 @@ static floor_request_t elv_clear_request(unsigned int request)
  */
 void controlTask(void)
 {
-    int status;
-    uint8_t rx_array[2];
     floor_request_t this_floor_request;
     uint8_t this_floor = 0;
     uint8_t last_floor = 0;
@@ -240,56 +315,23 @@ void controlTask(void)
         }
         rtos_mtxGive(elv_status.mtx);
 
-        /* Start I2C Critical Section */
-        rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
-        status = hw_i2cWriteRead(
-                I2C_CONTROL_ADDR,
-                &next_floor,
-                sizeof(next_floor),
-                rx_array,
-                sizeof(rx_array)
-                );
-        if (0 != status)
-        {
-            /* Handle i2c error here */
-        }
-        rtos_mtxGive(i2c_mtx);
-        /* End I2C Mutex Section */
+        /* Start moving to the next floor */
+        this_floor = i2c_control_write(next_floor);
 
-        this_floor = rx_array[0];
-        this_floor_request = FLOOR_SKIP;
 
         /* Update elevator status if current floor has changed */
+        this_floor_request = FLOOR_SKIP;
         if (last_floor != this_floor)
         {
             last_floor = this_floor;
-
-            rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
             this_floor_request = elv_clear_request(this_floor);
-            rtos_mtxGive(elv_status.mtx);
-
         }
 
-        /* If this floor requested a stop, stop for passengers */
+        /* If this floor had requested a stop, stop for passengers */
         if (FLOOR_STOP == this_floor_request)
         {
             /* Request the current floor to stop the elevator */
-
-            /* Start I2C Critical Section */
-            rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
-            status = hw_i2cWriteRead(
-                    I2C_CONTROL_ADDR,
-                    &this_floor,
-                    sizeof(this_floor),
-                    rx_array,
-                    sizeof(rx_array)
-                    );
-            if (0 != status)
-            {
-                /* Handle i2c error here */
-            }
-            rtos_mtxGive(i2c_mtx);
-            /* End I2C Mutex Section */
+            i2c_control_write(this_floor);
 
             /* Stop for a set amount of time for passengers */
             rtos_taskSleep(ELV_PASSENGER_TIME_MS);
@@ -297,7 +339,8 @@ void controlTask(void)
         else
         {
             /* Don't spam the i2c constantly. 
-             * Sleep so other tasks can use the i2c. */
+             * Sleep so other tasks can use the i2c. 
+             * This is optional, comment out if not wanted. */
             rtos_taskSleep(PANEL_UPDATE_INTERVAL_MS);
         }
 
@@ -316,39 +359,19 @@ void controlTask(void)
  */
 void panel1Task(void)
 {
-    int status;
-    uint8_t rx_data;
-    uint8_t tx_data;
+    uint8_t panel_data;
 
     while (1)
     {
-        tx_data = 0;
-        /* Start I2C Critical Section */
-        rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
-        status = hw_i2cWriteRead(
-                I2C_PANEL1_ADDR,
-                &tx_data,
-                sizeof(tx_data),
-                &rx_data,
-                sizeof(rx_data)
-                );
-        if (0 != status)
-        {
-            /* Handle i2c error here */
-        }
-        rtos_mtxGive(i2c_mtx);
-        /* End I2C Mutex Section */
+        panel_data = i2c_panel_read(I2C_PANEL1_ADDR);
 
         /* if request is valid, update elevator status */
-        if (0xff != rx_data)
-        {
-            rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
-            elv_add_request(rx_data);
-            rtos_mtxGive(elv_status.mtx);
-        }
+        if (0xff != panel_data)
+            elv_add_request(panel_data);
 
         /* Don't spam the i2c constantly. 
-         * Sleep so other tasks can use the i2c. */
+         * Sleep so other tasks can use the i2c.
+         * This is optional, comment out if not wanted. */
         rtos_taskSleep(PANEL_UPDATE_INTERVAL_MS);
     }
 }
@@ -368,9 +391,7 @@ void panel1Task(void)
 void panel2Task(void)
 {
     int result;
-    int status;
-    uint8_t rx_data;
-    uint8_t tx_data;
+    uint8_t panel_data;
 
     /* The sem starts taken so this task will block until an interrupt */
     rtos_semTake(gpio_a_sem, SEM_TIMEOUT_DEFAULT_MS);
@@ -380,34 +401,14 @@ void panel2Task(void)
         /* Block until interrupt releases the semaphore */
         result = rtos_semTake(gpio_a_sem, SEM_TIMEOUT_DEFAULT_MS);
 
-        /* If semaphore timed out skip the rest of the loop and try again */
-        if (0 != result)
-            continue;
-
-        tx_data = 0;
-        /* Start I2C Critical Section */
-        rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
-
-        status = hw_i2cWriteRead(
-                I2C_PANEL2_ADDR,
-                &tx_data,
-                sizeof(tx_data),
-                &rx_data,
-                sizeof(rx_data)
-                );
-        if (0 != status)
+        /* If semaphore was taken read the data from panel2 on the i2c */
+        if (0 == result)
         {
-            /* Handle i2c error here */
-        }
-        rtos_mtxGive(i2c_mtx);
-        /* End I2C Mutex Section */
+            panel_data = i2c_panel_read(I2C_PANEL2_ADDR);
 
-        /* if request is valid, update elevator status */
-        if (0xff != rx_data)
-        {
-            rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
-            elv_add_request(rx_data);
-            rtos_mtxGive(elv_status.mtx);
+            /* if request is valid, update elevator status */
+            if (0xff != panel_data)
+                elv_add_request(panel_data);
         }
     }
 
