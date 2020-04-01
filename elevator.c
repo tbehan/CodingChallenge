@@ -10,7 +10,8 @@
 #define ELV_PASSENGER_TIME_MS 10000
 #define PANEL_UPDATE_INTERVAL_MS   50
 #define CONTROL_UPDATE_INTERVAL_MS 100
-#define MUTEX_TIMEOUT_DEFAULT 500
+#define MUTEX_TIMEOUT_DEFAULT_MS 500
+#define SEM_TIMEOUT_DEFAULT_MS 500
 #define RTOS_DEFAULT_STACK_SIZE 100
 
 #define I2C_BUS_SPEED_HZ 100000
@@ -22,6 +23,7 @@
  *  Global Variables
  *-----------------------------------------------------------------------------*/
 mutex_t i2c_mtx;
+semaphore_t gpio_a_sem;
 
 typedef enum
 {
@@ -44,6 +46,35 @@ struct
     floor_request_t floor_request[ELV_NUM_FLOORS];
 } elv_status;
 
+
+/*-----------------------------------------------------------------------------
+ *  Interrupt Service Routines (ISR)
+ *-----------------------------------------------------------------------------*/
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  isr_gpio_a
+ *  Description:  Handle interrupts on GPIO port A.
+ *
+ *         Note:  Assuming interrupt is called per port and not per pin.
+ *
+ *       Inputs:  None.
+ *      Returns:  None.
+ * =====================================================================================
+ */
+void isr_gpio_a(void)
+{
+    /* Clear interrupt */
+    hw_gpioIrqClear(GPIO_PORT_A, GPIO_PIN_0);
+
+    /* Handle only the interrupt on Pin 0 */
+    if (true == hw_gpioIrqStatus(GPIO_PORT_A, GPIO_PIN_0))
+    {
+        rtos_semGive(gpio_a_sem);
+    }
+
+    return;
+}		/* -----  end of function isr_gpio_a  ----- */
 
 /*-----------------------------------------------------------------------------
  *  Elevator Helper Functions
@@ -190,7 +221,7 @@ void controlTask(void)
     while (1)
     {
         /* Determine the next floor to move to */
-        rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT);
+        rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
         /* Going up and not the top floor */
         if ((ELV_DIR_UP == elv_status.direction) && (ELV_TOP_FLOOR > this_floor))
         {
@@ -210,7 +241,7 @@ void controlTask(void)
         rtos_mtxGive(elv_status.mtx);
 
         /* Start I2C Critical Section */
-        rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT);
+        rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
         status = hw_i2cWriteRead(
                 I2C_CONTROL_ADDR,
                 &next_floor,
@@ -233,7 +264,7 @@ void controlTask(void)
         {
             last_floor = this_floor;
 
-            rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT);
+            rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
             this_floor_request = elv_clear_request(this_floor);
             rtos_mtxGive(elv_status.mtx);
 
@@ -245,7 +276,7 @@ void controlTask(void)
             /* Request the current floor to stop the elevator */
 
             /* Start I2C Critical Section */
-            rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT);
+            rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
             status = hw_i2cWriteRead(
                     I2C_CONTROL_ADDR,
                     &this_floor,
@@ -291,10 +322,9 @@ void panel1Task(void)
 
     while (1)
     {
-        /* Start I2C Critical Section */
-        rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT);
-
         tx_data = 0;
+        /* Start I2C Critical Section */
+        rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
         status = hw_i2cWriteRead(
                 I2C_PANEL1_ADDR,
                 &tx_data,
@@ -306,14 +336,13 @@ void panel1Task(void)
         {
             /* Handle i2c error here */
         }
-
         rtos_mtxGive(i2c_mtx);
         /* End I2C Mutex Section */
 
         /* if request is valid, update elevator status */
         if (0xff != rx_data)
         {
-            rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT);
+            rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
             elv_add_request(rx_data);
             rtos_mtxGive(elv_status.mtx);
         }
@@ -338,6 +367,49 @@ void panel1Task(void)
  */
 void panel2Task(void)
 {
+    int result;
+    int status;
+    uint8_t rx_data;
+    uint8_t tx_data;
+
+    /* The sem starts taken so this task will block until an interrupt */
+    rtos_semTake(gpio_a_sem, SEM_TIMEOUT_DEFAULT_MS);
+
+    while (1)
+    {
+        /* Block until interrupt releases the semaphore */
+        result = rtos_semTake(gpio_a_sem, SEM_TIMEOUT_DEFAULT_MS);
+
+        /* If semaphore timed out skip the rest of the loop and try again */
+        if (0 != result)
+            continue;
+
+        tx_data = 0;
+        /* Start I2C Critical Section */
+        rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT_MS);
+
+        status = hw_i2cWriteRead(
+                I2C_PANEL2_ADDR,
+                &tx_data,
+                sizeof(tx_data),
+                &rx_data,
+                sizeof(rx_data)
+                );
+        if (0 != status)
+        {
+            /* Handle i2c error here */
+        }
+        rtos_mtxGive(i2c_mtx);
+        /* End I2C Mutex Section */
+
+        /* if request is valid, update elevator status */
+        if (0xff != rx_data)
+        {
+            rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT_MS);
+            elv_add_request(rx_data);
+            rtos_mtxGive(elv_status.mtx);
+        }
+    }
 
 }
 
@@ -347,12 +419,6 @@ void panel2Task(void)
  */
 int main(void)
 {
-    /* Initialize Hardware */
-    if (0 != hw_i2cInit(I2C_BUS_0, I2C_BUS_SPEED_HZ))
-    {
-        /* Handle I2C bus error here */
-    }
-
     /* Initailize global variables */
     elv_status.mtx = rtos_mtxCreate();
     elv_status.current_floor = 0;
@@ -361,17 +427,36 @@ int main(void)
         elv_status.floor_request[i] = FLOOR_SKIP;
 
     i2c_mtx = rtos_mtxCreate();
+    gpio_a_sem = rtos_semCreate(1);
+
+    /* Initialize Hardware */
+    if (0 != hw_i2cInit(I2C_BUS_0, I2C_BUS_SPEED_HZ))
+    {
+        /* Handle I2C bus error here */
+    }
+
+    if (0 != hw_gpioInit(GPIO_PORT_A, GPIO_PIN_0))
+    {
+        /* Handle GPIO error here */
+    }
+    
+    /* Initialize Interrupts */
+    hw_gpioIrqInstall(GPIO_PORT_A, GPIO_PIN_0, GPIO_IRQ_TYPE_FALLING_EDGE, isr_gpio_a);
+    hw_gpioIrqEnable(GPIO_PORT_A, GPIO_PIN_0, 1);
 
     /* panel1Task and controlTask have the same priority and so should alternate
      * between each other as they grab control of the i2c mutex */
-    rtos_taskSpawn(panel1Task, 1, RTOS_DEFAULT_STACK_SIZE);
-    rtos_taskSpawn(controlTask, 1, RTOS_DEFAULT_STACK_SIZE);
+    rtos_taskSpawn(panel1Task, 2, RTOS_DEFAULT_STACK_SIZE);
+    rtos_taskSpawn(controlTask, 2, RTOS_DEFAULT_STACK_SIZE);
+
+    /* panel2Task has a higher priority as it blocks on the GPIO interrupt.
+     * And so will only try to use the I2C when it actually needs it. */
+    rtos_taskSpawn(panel2Task, 1, RTOS_DEFAULT_STACK_SIZE);
+
     rtos_startScheduler();
 
     /* Idle */
     while(1){};
-
-
 
     return 0;
 }
