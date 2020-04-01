@@ -6,6 +6,7 @@
  *  Defines
  *-----------------------------------------------------------------------------*/
 #define ELV_NUM_FLOORS 11
+#define ELV_TOP_FLOOR 10
 #define ELV_PASSENGER_TIME_MS 10000
 #define PANEL_UPDATE_INTERVAL_MS   50
 #define CONTROL_UPDATE_INTERVAL_MS 100
@@ -188,6 +189,26 @@ void controlTask(void)
 
     while (1)
     {
+        /* Determine the next floor to move to */
+        rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT);
+        /* Going up and not the top floor */
+        if ((ELV_DIR_UP == elv_status.direction) && (ELV_TOP_FLOOR > this_floor))
+        {
+            next_floor = this_floor + 1;
+        }
+        /* Going down and not the bottom floor */
+        else if ((ELV_DIR_DOWN == elv_status.direction) && (0 < this_floor))
+        {
+            next_floor = this_floor - 1;
+        }
+        /* Stopped or at an upper or lower limit */
+        else
+        {
+            next_floor = this_floor;
+            elv_status.direction = ELV_DIR_STOP;
+        }
+        rtos_mtxGive(elv_status.mtx);
+
         /* Start I2C Critical Section */
         rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT);
         status = hw_i2cWriteRead(
@@ -205,6 +226,7 @@ void controlTask(void)
         /* End I2C Mutex Section */
 
         this_floor = rx_array[0];
+        this_floor_request = FLOOR_SKIP;
 
         /* Update elevator status if current floor has changed */
         if (last_floor != this_floor)
@@ -215,27 +237,39 @@ void controlTask(void)
             this_floor_request = elv_clear_request(this_floor);
             rtos_mtxGive(elv_status.mtx);
 
-            /* If this floor requested a stop, stop for passengers */
-            if (FLOOR_STOP == this_floor_request)
-            {
-                /* Stop for a set amount of time for passengers */
-                rtos_taskSleep(ELV_PASSENGER_TIME_MS);
-            }
         }
 
-        /* Determine the next floor to move to */
-        rtos_mtxTake(elv_status.mtx, MUTEX_TIMEOUT_DEFAULT);
-        if (ELV_DIR_STOP == elv_status.direction)
-            next_floor = this_floor;
-        else if (ELV_DIR_UP == elv_status.direction)
-            next_floor = this_floor + 1;
-        else if (ELV_DIR_DOWN == elv_status.direction)
-            next_floor = this_floor - 1;
-        rtos_mtxGive(elv_status.mtx);
+        /* If this floor requested a stop, stop for passengers */
+        if (FLOOR_STOP == this_floor_request)
+        {
+            /* Request the current floor to stop the elevator */
 
-        /* Don't spam the i2c constantly. 
-         * Sleep so other tasks can use the i2c. */
-        rtos_taskSleep(PANEL_UPDATE_INTERVAL_MS);
+            /* Start I2C Critical Section */
+            rtos_mtxTake(i2c_mtx, MUTEX_TIMEOUT_DEFAULT);
+            status = hw_i2cWriteRead(
+                    I2C_CONTROL_ADDR,
+                    &this_floor,
+                    sizeof(this_floor),
+                    rx_array,
+                    sizeof(rx_array)
+                    );
+            if (0 != status)
+            {
+                /* Handle i2c error here */
+            }
+            rtos_mtxGive(i2c_mtx);
+            /* End I2C Mutex Section */
+
+            /* Stop for a set amount of time for passengers */
+            rtos_taskSleep(ELV_PASSENGER_TIME_MS);
+        }
+        else
+        {
+            /* Don't spam the i2c constantly. 
+             * Sleep so other tasks can use the i2c. */
+            rtos_taskSleep(PANEL_UPDATE_INTERVAL_MS);
+        }
+
     }
 }
 
